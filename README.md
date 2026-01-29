@@ -22,11 +22,17 @@ npm run build
 npm link        # optional, to get a global `skillhub` command
 ```
 
-Alternatively, you can use `npx`:
+Alternatively, you can run it without linking:
 
 ```bash
 npm run build
-npx skillhub-cli <command>
+node bin/skillhub.js <command>
+```
+
+If you published this package to npm, you can run it with `npx`:
+
+```bash
+npx @yw9142/skillhub-cli <command>
 ```
 
 ## Commands
@@ -61,12 +67,14 @@ skillhub sync --strategy latest
 1. **Read local skills**
    - Runs `npx skills list -g` and parses the global skills:
      - For example:
+
        ```text
        Global Skills
 
        vercel-composition-patterns ~\.agents\skills\vercel-composition-patterns
        vercel-react-best-practices ~\.agents\skills\vercel-react-best-practices
        ```
+
    - Falls back to `npx skills generate-lock` + searching for a
      `skills-lock.json` file when necessary.
 
@@ -89,9 +97,11 @@ skillhub sync --strategy latest
 
 4. **Apply changes**
    - For skills that exist remotely but not locally, SkillHub runs:
+
      ```bash
-     npx skills add vercel-labs/agent-skills --skill "<skill-name>" -g -y
+     npx skills add "<owner>/<repo>" --skill "<skill-name>" -g -y
      ```
+
    - For skills that exist locally but not in the Gist, the CLI updates
      `skillhub.json` in the Gist to reflect the union
 
@@ -106,16 +116,20 @@ Uploaded 0 changes, installed 4 skills (1 install failed – check logs)
 
 ## Gist Payload
 
-The Gist file `skillhub.json` currently uses a simple payload:
+The Gist file `skillhub.json` stores both the skill name and its source repo
+(so you can install skills from repos other than `vercel-labs/agent-skills`):
 
 ```json
 {
-  "skills": ["vercel-composition-patterns", "vercel-react-best-practices"],
+  "skills": [
+    { "name": "vercel-composition-patterns", "source": "vercel-labs/agent-skills" },
+    { "name": "my-custom-skill", "source": "yw9142/my-agent-tools" }
+  ],
   "updatedAt": "2026-01-29T07:27:53.844Z"
 }
 ```
 
-- `skills`: list of skill names as reported by `skills list -g`
+- `skills`: list of installed skills + where they came from (`owner/repo`)
 - `updatedAt`: ISO timestamp when the payload was last written
 
 This keeps the format easy to inspect and edit directly in GitHub if needed.
@@ -152,16 +166,20 @@ skillhub sync
 
 ## Notes and Limitations
 
-- The installer assumes your skills come from
-  `vercel-labs/agent-skills` and calls:
+- Local discovery uses `npx skills list -g` as the primary source. That output
+  usually does **not** include `owner/repo`, so SkillHub may fall back to a
+  default source (`vercel-labs/agent-skills`) unless it can infer a source from
+  `skills-lock.json`.
+- For installs, SkillHub uses the stored `source` per skill:
+
   ```bash
-  npx skills add vercel-labs/agent-skills --skill "<skill-name>" -g -y
+  npx skills add "<owner>/<repo>" --skill "<skill-name>" -g -y
   ```
-  If a skill name doesn’t exist in that repo, the install will fail but
-  the overall sync will continue.
+
+  If a skill name doesn’t exist in that repo, the install will fail but the
+  overall sync will continue.
 - The CLI currently focuses on **global** skills (`skills list -g`),
   not project-scoped skills.
 - Error messages try to surface both:
   - Which step failed (local list / lock file / install / Gist)
   - The underlying CLI output for easier debugging
-
