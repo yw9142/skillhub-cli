@@ -3,7 +3,7 @@ name: Publish to npm
 on:
   release:
     types: [created]
-  workflow_dispatch:  # 수동 실행도 가능하게
+  workflow_dispatch:
 
 permissions:
   id-token: write   # OIDC 인증용
@@ -19,9 +19,39 @@ jobs:
         with:
           node-version: '18'
           registry-url: 'https://registry.npmjs.org'
+          # OIDC를 사용하려면 이 부분이 필요함
       
       - run: npm ci
       - run: npm run build
       
       - name: Publish to npm
         run: npm publish --access public
+        # OIDC를 사용할 때는 NODE_AUTH_TOKEN이 자동으로 설정됨name: Publish to npm
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC 인증용
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          registry-url: 'https://registry.npmjs.org'
+          # OIDC를 사용하려면 이 부분이 필요함
+      
+      - run: npm ci
+      - run: npm run build
+      
+      - name: Publish to npm
+        run: npm publish --access public
+        # OIDC를 사용할 때는 NODE_AUTH_TOKEN이 자동으로 설정됨
