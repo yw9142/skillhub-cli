@@ -1,6 +1,6 @@
 {
   "name": "@yw9142/skillhub-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SkillHub CLI - sync skills with GitHub Gist",
   "bin": {
     "skillhub": "bin/skillhub.js"
