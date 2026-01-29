@@ -11,12 +11,14 @@ import {
   getSkillhubPayload,
   updateSkillhubGist,
   SkillhubPayload,
+  SkillInfo,
 } from "@/service/gistService";
 
 const execAsync = promisify(exec);
 
 const SKILLS_LOCK_FILENAME = "skills-lock.json";
 const DEFAULT_STRATEGY: MergeStrategy = "union";
+const DEFAULT_SKILL_SOURCE_REPO = "vercel-labs/agent-skills";
 
 export async function runSync(strategyInput?: string) {
   const strategy = parseStrategy(strategyInput);
@@ -26,9 +28,9 @@ export async function runSync(strategyInput?: string) {
     throw new Error("You must login first. Run `skillhub login` and try again.");
   }
 
-  const localSkills = sanitizeSkillNames(await getLocalSkills());
+  const localSkills = await getLocalSkills();
   const localPayload: SkillhubPayload = {
-    skills: uniqueSorted(localSkills),
+    skills: uniqueSortedSkills(localSkills),
     updatedAt: new Date().toISOString(),
   };
 
@@ -67,7 +69,7 @@ export async function runSync(strategyInput?: string) {
   const resolvedRemote = remotePayload
     ? {
         ...remotePayload,
-        skills: sanitizeSkillNames(remotePayload.skills ?? []),
+        skills: normalizeSkills(remotePayload.skills ?? []),
       }
     : { skills: [], updatedAt: "" };
 
@@ -96,7 +98,7 @@ function parseStrategy(input?: string): MergeStrategy {
   return DEFAULT_STRATEGY;
 }
 
-async function getLocalSkills() {
+async function getLocalSkills(): Promise<SkillInfo[]> {
   // 1) Primary source: `skills list -g` output
   // - generate-lock can be flaky (e.g. "already in lock file" without writing),
   //   so we prefer parsing the list output when possible.
@@ -183,39 +185,54 @@ async function tryReadSkillsLock(lockPath: string) {
   }
 }
 
-function parseSkillsLock(raw: string) {
+function parseSkillsLock(raw: string): SkillInfo[] {
   const parsed = JSON.parse(raw);
+
+  // skills-lock.json에서 source 정보 추출 시도
+  const extractSkills = (items: any[]): SkillInfo[] => {
+    return items.map((item) => {
+      if (typeof item === "string") {
+        return { name: item, source: DEFAULT_SKILL_SOURCE_REPO };
+      }
+      if (typeof item === "object" && item !== null) {
+        const name = item.name || item.skill || String(item);
+        const source = item.source || item.repo || DEFAULT_SKILL_SOURCE_REPO;
+        return { name: String(name), source: String(source) };
+      }
+      return { name: String(item), source: DEFAULT_SKILL_SOURCE_REPO };
+    });
+  };
 
   const fromSkills = parsed?.skills;
   if (Array.isArray(fromSkills)) {
-    return fromSkills.map(String);
+    return extractSkills(fromSkills);
   }
 
   if (Array.isArray(parsed)) {
-    return parsed.map(String);
+    return extractSkills(parsed);
   }
 
   const fromInstalled = parsed?.installedSkills;
   if (Array.isArray(fromInstalled)) {
-    return fromInstalled.map(String);
+    return extractSkills(fromInstalled);
   }
 
   return [];
 }
 
-function parseSkillsListOutput(output: string) {
+function parseSkillsListOutput(output: string): SkillInfo[] {
   const cleaned = output.replace(/\x1b\[[0-9;]*m/g, "");
   const lines = cleaned.split(/\r?\n/).map((line) => line.trim());
 
-  const names: string[] = [];
+  const skills: SkillInfo[] = [];
   for (const line of lines) {
     if (!line) continue;
     if (line === "Global Skills") continue;
     if (line.startsWith("Agents:")) continue;
     if (line.startsWith("No project skills found")) continue;
     if (line.startsWith("Try listing global skills")) continue;
-     if (line.startsWith("No global skills found")) continue;
-     if (line.startsWith("Try listing project skills without -g")) continue;
+    if (line.startsWith("No global skills found")) continue;
+    if (line.startsWith("Try listing project skills without -g")) continue;
 
     // Example: "find-skills ~\\.agents\\skills\\find-skills"
     // We only take the first token as the skill name
@@ -224,13 +241,15 @@ function parseSkillsListOutput(output: string) {
 
     // Skip obvious path-like tokens as a safety net
     if (name.includes("\\") || name.includes("/") || name.includes("~")) continue;
-    names.push(name);
+    
+    // skills list 출력에는 source 정보가 없으므로 기본값 사용
+    skills.push({ name, source: DEFAULT_SKILL_SOURCE_REPO });
   }
 
-  return uniqueSorted(names);
+  return uniqueSortedSkills(skills);
 }
 
-function sanitizeSkillNames(list: string[]) {
+function normalizeSkills(skills: SkillInfo[] | string[]): SkillInfo[] {
   const bannedSubstrings = [
     "No global skills found",
     "Try listing project skills without -g",
@@ -238,13 +257,20 @@ function sanitizeSkillNames(list: string[]) {
     "Try listing global skills",
   ];
 
-  return uniqueSorted(
-    list.filter(
-      (name) =>
-        !!name &&
-        !bannedSubstrings.some((bad) => name.includes(bad))
-    )
-  );
+  const normalized = skills
+    .map((skill) => {
+      if (typeof skill === "string") {
+        return { name: skill, source: DEFAULT_SKILL_SOURCE_REPO };
+      }
+      return skill;
+    })
+    .filter(
+      (skill) =>
+        !!skill.name &&
+        !bannedSubstrings.some((bad) => skill.name.includes(bad))
+    );
+
+  return uniqueSortedSkills(normalized);
 }
 
 async function safeGetPayload(octokit: ReturnType<typeof createOctokit>, gistId: string) {
@@ -255,20 +281,34 @@ async function safeGetPayload(octokit: ReturnType<typeof createOctokit>, gistId:
   }
 }
 
-function uniqueSorted(list: string[]) {
-  return Array.from(new Set(list.filter(Boolean))).sort();
+function uniqueSortedSkills(skills: SkillInfo[]): SkillInfo[] {
+  const seen = new Set<string>();
+  const result: SkillInfo[] = [];
+  
+  for (const skill of skills) {
+    const key = `${skill.source}:${skill.name}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(skill);
+    }
+  }
+  
+  return result.sort((a, b) => {
+    if (a.source !== b.source) {
+      return a.source.localeCompare(b.source);
+    }
+    return a.name.localeCompare(b.name);
+  });
 }
 
-const DEFAULT_SKILL_SOURCE_REPO = "vercel-labs/agent-skills";
-
-async function installSkills(skills: string[]) {
-  const succeeded: string[] = [];
-  const failed: { skill: string; reason: string }[] = [];
+async function installSkills(skills: SkillInfo[]) {
+  const succeeded: SkillInfo[] = [];
+  const failed: { skill: SkillInfo; reason: string }[] = [];
 
   for (const skill of skills) {
     try {
       const { stdout, stderr } = await execAsync(
-        `npx skills add ${DEFAULT_SKILL_SOURCE_REPO} --skill "${skill}" --global --yes`
+        `npx skills add ${skill.source} --skill "${skill.name}" --global --yes`
       );
       const output = `${stdout ?? ""}\n${stderr ?? ""}`.trim();
       if (output) {
@@ -282,7 +322,7 @@ async function installSkills(skills: string[]) {
       failed.push({ skill, reason });
       console.warn(
         [
-          `스킬 설치 실패: ${skill}`,
+          `스킬 설치 실패: ${skill.name} (from ${skill.source})`,
           reason && `  └─ ${reason}`,
         ]
           .filter(Boolean)
@@ -300,13 +340,16 @@ async function applyUnionStrategy(params: {
   local: SkillhubPayload;
   remote: SkillhubPayload;
 }) {
-  const unionSkills = uniqueSorted([
-    ...params.local.skills,
-    ...params.remote.skills,
-  ]);
+  const localSkills = normalizeSkills(params.local.skills);
+  const remoteSkills = normalizeSkills(params.remote.skills);
+
+  const unionSkills = uniqueSortedSkills([...localSkills, ...remoteSkills]);
 
   const missingLocally = unionSkills.filter(
-    (skill) => !params.local.skills.includes(skill)
+    (skill) =>
+      !localSkills.some(
+        (local) => local.name === skill.name && local.source === skill.source
+      )
   );
 
   const payload: SkillhubPayload = {
@@ -317,7 +360,7 @@ async function applyUnionStrategy(params: {
   const { succeeded, failed } = await installSkills(missingLocally);
   await updateSkillhubGist(params.octokit, params.gistId, payload);
 
-  const uploadCount = areSameSkills(params.remote.skills, unionSkills) ? 0 : 1;
+  const uploadCount = areSameSkills(remoteSkills, unionSkills) ? 0 : 1;
   const installCount = succeeded.length;
   const failedCount = failed.length;
 
@@ -340,8 +383,13 @@ async function applyLatestStrategy(params: {
   const isRemoteNewer = Number.isFinite(remoteTime) && remoteTime > localTime;
 
   if (isRemoteNewer) {
-    const missingLocally = params.remote.skills.filter(
-      (skill) => !params.local.skills.includes(skill)
+    const localSkills = normalizeSkills(params.local.skills);
+    const remoteSkills = normalizeSkills(params.remote.skills);
+    const missingLocally = remoteSkills.filter(
+      (skill) =>
+        !localSkills.some(
+          (local) => local.name === skill.name && local.source === skill.source
+        )
     );
     const { succeeded, failed } = await installSkills(missingLocally);
     const failedCount = failed.length;
@@ -357,8 +405,15 @@ async function applyLatestStrategy(params: {
   console.log("업로드 1건, 설치 0건");
 }
 
-function areSameSkills(left: string[], right: string[]) {
-  const leftSorted = uniqueSorted(left);
-  const rightSorted = uniqueSorted(right);
-  return leftSorted.join() === rightSorted.join();
+function areSameSkills(left: SkillInfo[], right: SkillInfo[]) {
+  const leftSorted = uniqueSortedSkills(left);
+  const rightSorted = uniqueSortedSkills(right);
+  if (leftSorted.length !== rightSorted.length) {
+    return false;
+  }
+  return leftSorted.every(
+    (skill, index) =>
+      skill.name === rightSorted[index].name &&
+      skill.source === rightSorted[index].source
+  );
 }

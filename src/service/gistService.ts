@@ -2,8 +2,14 @@ import { Octokit, RestEndpointMethodTypes } from "@octokit/rest";
 
 const SKILLHUB_FILENAME = "skillhub.json";
 
+export type SkillInfo = {
+  name: string;
+  source: string; // owner/repo format, e.g., "vercel-labs/agent-skills"
+};
+
+// 하위 호환성을 위해 string[] 형식도 허용
 export type SkillhubPayload = {
-  skills: string[];
+  skills: SkillInfo[] | string[];
   updatedAt: string;
 };
 
@@ -51,7 +57,17 @@ export async function getSkillhubPayload(octokit: Octokit, gistId: string) {
     if (!Array.isArray(parsed.skills)) {
       return null;
     }
-    return parsed;
+    // 하위 호환성: string[] 형식을 SkillInfo[] 형식으로 변환
+    const normalizedSkills = parsed.skills.map((skill) => {
+      if (typeof skill === "string") {
+        return { name: skill, source: "vercel-labs/agent-skills" };
+      }
+      return skill;
+    });
+    return {
+      ...parsed,
+      skills: normalizedSkills,
+    };
   } catch {
     return null;
   }
