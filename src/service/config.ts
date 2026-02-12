@@ -9,6 +9,7 @@ type ConfigShape = {
 type ConfigApi<T> = {
   get: <K extends keyof T>(key: K) => T[K] | undefined;
   set: <K extends keyof T>(key: K, value: T[K]) => void;
+  delete: <K extends keyof T>(key: K) => void;
 };
 
 let configPromise: Promise<ConfigApi<ConfigShape>> | null = null;
@@ -49,5 +50,23 @@ export const configStore = {
   async setLastSyncAt(lastSyncAt: string) {
     const config = await getConfig();
     config.set("lastSyncAt", lastSyncAt);
+  },
+  async clearToken() {
+    const config = await getConfig();
+    config.delete("githubToken");
+  },
+  async clearGistId() {
+    const config = await getConfig();
+    config.delete("gistId");
+  },
+  async clearLastSyncAt() {
+    const config = await getConfig();
+    config.delete("lastSyncAt");
+  },
+  async clearSession() {
+    const config = await getConfig();
+    config.delete("githubToken");
+    config.delete("gistId");
+    config.delete("lastSyncAt");
   },
 };

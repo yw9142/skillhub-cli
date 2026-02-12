@@ -1,6 +1,6 @@
 {
   "name": "@yonpark/skillhub-cli",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "SkillHub CLI - sync skills with GitHub Gist",
   "bin": {
     "skillhub": "bin/skillhub.js"
@@ -9,8 +9,13 @@
   "type": "commonjs",
   "scripts": {
     "build": "tsc && tsc-alias",
-    "start": "node dist/index.js",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:ci": "vitest run",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "changeset publish --access public"
   },
   "files": [
     "dist",
@@ -40,9 +45,11 @@
     "inquirer": "^9.2.12"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.7",
     "@types/node": "^20.11.10",
     "@types/inquirer": "^9.0.7",
     "tsc-alias": "^1.8.8",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^2.1.8"
   }
 }

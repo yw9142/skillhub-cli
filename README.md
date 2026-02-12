@@ -1,20 +1,8 @@
-# SkillHub CLI (Gist Edition)
+# SkillHub CLI
 
-SkillHub is a CLI that syncs your local AI agent skills (managed by `npx skills`)
-with a private GitHub Gist. The Gist acts as a simple backup so you can recreate
-your skill setup on another machine.
+Sync local AI agent skills (`npx skills`) with a private GitHub Gist.
 
-## Features
-
-- Login with a GitHub Personal Access Token (classic) with `gist` scope
-- Sync local skills with a remote Gist payload
-- Merge strategies:
-  - `union` (default): reconcile both sides
-  - `latest`: compare remote timestamp against the last successful local sync
-
-## Installation
-
-From the project root:
+## Quick Start
 
 ```bash
 npm install
@@ -25,96 +13,107 @@ npm link
 Run without linking:
 
 ```bash
-npm run build
 node bin/skillhub.js <command>
 ```
 
-Run published package with `npx`:
+Published package:
 
 ```bash
 npx @yonpark/skillhub-cli <command>
 ```
 
-## Local npm Token Setup
-
-If you need npm auth for GitHub Packages:
-
-1. Copy `.npmrc.example` to `.npmrc`.
-2. Fill your real token in `.npmrc`.
-3. Keep `.npmrc` local only (it is gitignored).
-
 ## Commands
 
-### `skillhub login`
+### Login
 
-Registers a GitHub token locally so the CLI can call the Gist API.
+```bash
+skillhub login
+```
 
-The command:
+- Prompts for a GitHub PAT (classic, `gist` scope)
+- Verifies token + Gist API access
+- Stores token locally via `conf`
 
-1. Prompts for a token
-2. Verifies the token with GitHub API + Gist API access
-3. Stores the token locally via [`conf`](https://www.npmjs.com/package/conf)
-
-### `skillhub sync`
-
-Synchronizes local skills with the remote Gist.
+### Sync
 
 ```bash
 skillhub sync
 skillhub sync --strategy union
 skillhub sync --strategy latest
+skillhub sync --dry-run
+skillhub sync --json
 ```
 
-Invalid strategies now return an error (supported: `union`, `latest`).
+- `union`: merge local and remote skills, install missing local skills, upload only when changed
+- `latest`: compare `remote.updatedAt` and local `lastSyncAt`
+- `--dry-run`: compute plan only (no install, no Gist update, no config write)
+- `--json`: single JSON output object
 
-#### Strategy behavior
+### Status
 
-1. `union`:
-   - Builds the union of local and remote skills
-   - Installs remote-only skills locally
-   - Updates Gist only when skill set actually changed
+```bash
+skillhub status
+skillhub status --json
+```
 
-2. `latest`:
-   - Compares `remote.updatedAt` with local `lastSyncAt` (last successful sync)
-   - If remote is newer: installs missing remote skills locally
-   - Otherwise: pushes local payload to Gist when local and remote differ
+Shows:
 
-On partial install failures, sync reports failed installs and exits non-zero.
+- login state
+- stored gist id
+- last successful sync timestamp
+- local skill count (if available)
+- remote Gist API accessibility
 
-## Gist Payload
+### Logout
 
-`skillhub.json` format:
+```bash
+skillhub logout
+skillhub logout --yes
+skillhub logout --json
+```
+
+Clears stored session keys: `githubToken`, `gistId`, `lastSyncAt`.
+
+## Payload Format
+
+`skillhub.json` in Gist:
 
 ```json
 {
   "skills": [
-    { "name": "vercel-composition-patterns", "source": "vercel-labs/agent-skills" },
-    { "name": "my-custom-skill", "source": "yw9142/my-agent-tools" }
+    { "name": "vercel-composition-patterns", "source": "vercel-labs/agent-skills" }
   ],
   "updatedAt": "2026-01-29T07:27:53.844Z"
 }
 ```
 
-- `skills`: installed skills with source repo (`owner/repo`)
-- `updatedAt`: ISO timestamp of the last payload write
+Backward compatibility for legacy `skills: string[]` is preserved.
 
-## Security Response for Exposed Token
+## Local npm Credentials
 
-If a token was committed previously, complete these manual steps:
+If you need npm auth, copy `.npmrc.example` to `.npmrc` and keep it local only.
 
-1. Revoke the exposed token in GitHub immediately.
-2. Generate a new token with minimum required scope (`gist`).
-3. Update local auth (`skillhub login` and local `.npmrc` if used).
-4. Review package publish access/audit logs for suspicious activity.
+## Release (Changesets)
 
-This repository only includes `.npmrc.example`; never commit real credentials.
-
-## Notes
-
-- Local discovery prioritizes `npx skills list -g`.
-- Fallback path uses `npx skills generate-lock` + `skills-lock.json` search.
-- Skill install command uses:
+Create release note:
 
 ```bash
-npx skills add "<owner>/<repo>" --skill "<skill-name>" --global --yes
+npm run changeset
 ```
+
+Version packages:
+
+```bash
+npm run version-packages
+```
+
+Publish:
+
+```bash
+npm run release
+```
+
+CI release workflow requires:
+
+- `NPM_TOKEN` secret with publish permission to `@yonpark` scope.
+- GitHub Packages mirror is published as `@yw9142/skillhub-cli` via `GITHUB_TOKEN`.
