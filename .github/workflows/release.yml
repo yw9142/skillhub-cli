@@ -4,16 +4,15 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
   packages: write
 
 jobs:
-  release:
+  publish-github-packages:
     runs-on: ubuntu-latest
-    environment: NPM_TOKEN
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,7 +24,6 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: npm ci
@@ -33,40 +31,26 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Verify npm authentication
+      - name: Configure npm auth for GitHub Packages
         run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN is empty. Set it in the 'NPM_TOKEN' environment secrets."
-            exit 1
+          echo "@yw9142:registry=https://npm.pkg.github.com" > ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" >> ~/.npmrc
+
+      - name: Verify GitHub Packages authentication
+        run: npm whoami --registry https://npm.pkg.github.com
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to GitHub Packages when version is new
+        run: |
+          package_name="$(node -p "require('./package.json').name")"
+          package_version="$(node -p "require('./package.json').version")"
+
+          if npm view "${package_name}@${package_version}" version --registry https://npm.pkg.github.com > /dev/null 2>&1; then
+            echo "GitHub Packages already has ${package_name}@${package_version}; skipping publish."
+            exit 0
           fi
 
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          npm_user="$(npm whoami)"
-          package_scope="$(node -p "const n=require('./package.json').name; const m=n.match(/^@([^/]+)\\//); m ? m[1] : ''")"
-
-          if [ -n "${package_scope}" ] && [ "${npm_user}" != "${package_scope}" ]; then
-            echo "::error::NPM token owner '${npm_user}' does not match package scope '@${package_scope}'."
-            exit 1
-          fi
-
-          echo "npm auth verified for user: ${npm_user}"
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create Release PR or Publish
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          version: npm run version-packages
-          publish: npm run release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish GitHub Packages mirror
-        if: steps.changesets.outputs.published == 'true'
-        run: |
-          npm pkg set name="@yw9142/skillhub-cli"
           npm publish --registry https://npm.pkg.github.com
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

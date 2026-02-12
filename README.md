@@ -115,5 +115,5 @@ npm run release
 
 CI release workflow requires:
 
-- `NPM_TOKEN` secret with publish permission to `@yw9142` scope.
-- GitHub Packages mirror is published as `@yw9142/skillhub-cli` via `GITHUB_TOKEN`.
+- GitHub Packages publish uses `GITHUB_TOKEN` from Actions.
+- Package is published to GitHub Packages as `@yw9142/skillhub-cli`.
