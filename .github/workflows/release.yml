@@ -52,6 +52,17 @@ jobs:
           fi
 
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+
+          npm_user="$(npm whoami --registry https://registry.npmjs.org 2>/dev/null || true)"
+          if [ -z "${npm_user}" ]; then
+            echo "::error::NPM token authentication failed (npm whoami)."
+            exit 1
+          fi
+          if [ "${npm_user}" != "yonpark" ]; then
+            echo "::error::NPM_TOKEN belongs to '${npm_user}', but publish target is '${target_name}'."
+            exit 1
+          fi
+
           npm pkg set name="${target_name}"
 
           if ! npm publish --registry https://registry.npmjs.org --access public; then
