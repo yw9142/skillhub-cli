@@ -70,24 +70,6 @@ Mode behavior:
 - `merge`: union local + remote, installs missing local skills, uploads when remote differs.
 - `auto`: compare `remote.updatedAt` and local `lastSyncAt`; install from remote when remote is newer, otherwise upload local when needed.
 
-## Migration (Breaking Changes in 0.3.0)
-
-Removed commands:
-
-- `skillhub login`
-- `skillhub status`
-- `skillhub logout`
-- `skillhub sync --strategy ...`
-- `skillhub sync` (without a subcommand)
-
-New mapping:
-
-- `skillhub login` -> `skillhub auth login`
-- `skillhub status` -> `skillhub auth status`
-- `skillhub logout` -> `skillhub auth logout`
-- `skillhub sync --strategy union` -> `skillhub sync merge`
-- `skillhub sync --strategy latest` -> `skillhub sync auto`
-
 ## Payload Format
 
 `skillhub.json` in Gist:
@@ -134,3 +116,4 @@ CI release workflow publishes to GitHub Packages only:
 - GitHub Packages target package is `@yw9142/skillhub-cli`.
 
 npmjs publish is manual.
+

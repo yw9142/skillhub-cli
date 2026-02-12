@@ -1,18 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockExecFile } = vi.hoisted(() => ({
+const { mockExecFile, mockReadFile } = vi.hoisted(() => ({
   mockExecFile: vi.fn(),
+  mockReadFile: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
   execFile: mockExecFile,
 }));
 
-import { isValidSource, removeSkills } from "@/service/skillsService";
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readFile: mockReadFile,
+  },
+  readFile: mockReadFile,
+}));
+
+import { getLocalSkills, isValidSource, removeSkills } from "@/service/skillsService";
 
 describe("skills service", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mockReadFile.mockRejectedValue(new Error("not found"));
   });
 
   it("validates source format owner/repo", () => {
@@ -75,5 +84,59 @@ describe("skills service", () => {
       source: "org/repo",
     });
     expect(result.failed[0]?.reason).toContain("remove failed");
+  });
+
+  it("hydrates skill sources from .skill-lock.json metadata", async () => {
+    mockExecFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        callback(
+          null,
+          [
+            "Global Skills",
+            "",
+            "building-native-ui ~/.agents/skills/building-native-ui",
+            "  Agents: Claude Code",
+            "web-design-guidelines ~/.agents/skills/web-design-guidelines",
+            "  Agents: Claude Code",
+          ].join("\n"),
+          ""
+        );
+      }
+    );
+
+    mockReadFile.mockImplementation(async (lockPath: string) => {
+      if (lockPath.replace(/\\/g, "/").endsWith("/.agents/.skill-lock.json")) {
+        return JSON.stringify({
+          version: 3,
+          skills: {
+            "building-native-ui": {
+              source: "expo/skills",
+            },
+            "web-design-guidelines": {
+              source: "vercel-labs/agent-skills",
+            },
+          },
+        });
+      }
+      throw new Error("not found");
+    });
+
+    const skills = await getLocalSkills();
+
+    expect(skills).toEqual([
+      {
+        name: "building-native-ui",
+        source: "expo/skills",
+      },
+      {
+        name: "web-design-guidelines",
+        source: "vercel-labs/agent-skills",
+      },
+    ]);
   });
 });

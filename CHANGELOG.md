@@ -1,5 +1,12 @@
 # @yw9142/skillhub-cli
 
+## 0.3.1
+
+### Patch Changes
+
+- Fix skill source resolution by reading `.skill-lock.json` metadata first, so non-Vercel skills keep their original sources (for example `expo/skills`, `supabase/agent-skills`) during sync/push.
+- Remove the migration section from `README.md`.
+
 ## 0.3.0
 
 ### Breaking Changes
