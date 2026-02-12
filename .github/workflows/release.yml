@@ -32,9 +32,21 @@ jobs:
         run: npm run build
 
       - name: Configure npm auth for GitHub Packages
+        env:
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if [ -n "${GH_PACKAGES_TOKEN}" ]; then
+            token="${GH_PACKAGES_TOKEN}"
+            echo "Using GH_PACKAGES_TOKEN for GitHub Packages publish."
+          else
+            token="${GITHUB_TOKEN}"
+            echo "Using default GITHUB_TOKEN for GitHub Packages publish."
+          fi
+
+          echo "NODE_AUTH_TOKEN=${token}" >> "$GITHUB_ENV"
           echo "@yw9142:registry=https://npm.pkg.github.com" > ~/.npmrc
-          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" >> ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${token}" >> ~/.npmrc
 
       - name: Publish to GitHub Packages when version is new
         run: |
@@ -46,6 +58,7 @@ jobs:
             exit 0
           fi
 
-          npm publish --registry https://npm.pkg.github.com
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if ! npm publish --registry https://npm.pkg.github.com; then
+            echo "::error::GitHub Packages publish failed. If this package was created outside this repo, add GH_PACKAGES_TOKEN (PAT with write:packages) in repository secrets and re-run."
+            exit 1
+          fi
