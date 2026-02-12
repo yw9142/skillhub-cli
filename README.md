@@ -1,16 +1,16 @@
 # SkillHub CLI (Gist Edition)
 
-SkillHub is a small CLI that syncs your local AI agent skills (managed by `npx skills`)
-with a single GitHub Gist. The Gist acts as a free, serverless backup so you can
-recreate your skill setup on any machine.
+SkillHub is a CLI that syncs your local AI agent skills (managed by `npx skills`)
+with a private GitHub Gist. The Gist acts as a simple backup so you can recreate
+your skill setup on another machine.
 
 ## Features
 
-- **Login** with a GitHub Personal Access Token (classic) that has `gist` scope
-- **Sync** local skills with a remote Gist:
-  - Push new local skills up to Gist
-  - Pull missing skills down from Gist and install them globally
-  - Simple merge strategies (`union` and `latest`)
+- Login with a GitHub Personal Access Token (classic) with `gist` scope
+- Sync local skills with a remote Gist payload
+- Merge strategies:
+  - `union` (default): reconcile both sides
+  - `latest`: compare remote timestamp against the last successful local sync
 
 ## Installation
 
@@ -19,42 +19,45 @@ From the project root:
 ```bash
 npm install
 npm run build
-npm link        # optional, to get a global `skillhub` command
+npm link
 ```
 
-Alternatively, you can run it without linking:
+Run without linking:
 
 ```bash
 npm run build
 node bin/skillhub.js <command>
 ```
 
-If you published this package to npm, you can run it with `npx`:
+Run published package with `npx`:
 
 ```bash
-npx @yw9142/skillhub-cli <command>
+npx @yonpark/skillhub-cli <command>
 ```
+
+## Local npm Token Setup
+
+If you need npm auth for GitHub Packages:
+
+1. Copy `.npmrc.example` to `.npmrc`.
+2. Fill your real token in `.npmrc`.
+3. Keep `.npmrc` local only (it is gitignored).
 
 ## Commands
 
 ### `skillhub login`
 
-Registers a GitHub token locally so the CLI can talk to the Gist API.
+Registers a GitHub token locally so the CLI can call the Gist API.
 
-The command will:
+The command:
 
-1. Prompt for a token:
-   - Create a **Personal Access Token (classic)** in GitHub
-   - Grant at least the **`gist`** scope
-2. Verify that the token is valid and can access Gists
-3. Store the token locally using [`conf`](https://www.npmjs.com/package/conf)
-
-If login fails, the CLI explains that the token is invalid or missing gist
-permissions, and you can paste a new one.
+1. Prompts for a token
+2. Verifies the token with GitHub API + Gist API access
+3. Stores the token locally via [`conf`](https://www.npmjs.com/package/conf)
 
 ### `skillhub sync`
 
-Synchronizes your local skills with the remote Gist.
+Synchronizes local skills with the remote Gist.
 
 ```bash
 skillhub sync
@@ -62,62 +65,25 @@ skillhub sync --strategy union
 skillhub sync --strategy latest
 ```
 
-#### What “sync” actually does
+Invalid strategies now return an error (supported: `union`, `latest`).
 
-1. **Read local skills**
-   - Runs `npx skills list -g` and parses the global skills:
-     - For example:
+#### Strategy behavior
 
-       ```text
-       Global Skills
+1. `union`:
+   - Builds the union of local and remote skills
+   - Installs remote-only skills locally
+   - Updates Gist only when skill set actually changed
 
-       vercel-composition-patterns ~\.agents\skills\vercel-composition-patterns
-       vercel-react-best-practices ~\.agents\skills\vercel-react-best-practices
-       ```
+2. `latest`:
+   - Compares `remote.updatedAt` with local `lastSyncAt` (last successful sync)
+   - If remote is newer: installs missing remote skills locally
+   - Otherwise: pushes local payload to Gist when local and remote differ
 
-   - Falls back to `npx skills generate-lock` + searching for a
-     `skills-lock.json` file when necessary.
-
-2. **Read remote skills (from Gist)**
-   - Looks for a private Gist that contains `skillhub.json`
-   - If not found, creates a new Gist
-
-3. **Merge local vs remote**
-   - **`union` (default)**:
-     - Takes the set union of local and remote skill names
-     - Any skills only on Gist are installed locally
-     - Any skills only on local are written to Gist
-   - **`latest`**:
-     - Compares `updatedAt` timestamps in the payloads
-     - If remote is newer:
-       - Installs skills that are missing locally
-       - Gist is treated as the source of truth
-     - If local is newer (or timestamps are invalid):
-       - Overwrites the Gist with local data
-
-4. **Apply changes**
-   - For skills that exist remotely but not locally, SkillHub runs:
-
-     ```bash
-     npx skills add "<owner>/<repo>" --skill "<skill-name>" -g -y
-     ```
-
-   - For skills that exist locally but not in the Gist, the CLI updates
-     `skillhub.json` in the Gist to reflect the union
-
-5. **Summary output**
-
-After a run you’ll see a short summary like:
-
-```text
-Uploaded 1 change, installed 0 skills
-Uploaded 0 changes, installed 4 skills (1 install failed – check logs)
-```
+On partial install failures, sync reports failed installs and exits non-zero.
 
 ## Gist Payload
 
-The Gist file `skillhub.json` stores both the skill name and its source repo
-(so you can install skills from repos other than `vercel-labs/agent-skills`):
+`skillhub.json` format:
 
 ```json
 {
@@ -129,57 +95,26 @@ The Gist file `skillhub.json` stores both the skill name and its source repo
 }
 ```
 
-- `skills`: list of installed skills + where they came from (`owner/repo`)
-- `updatedAt`: ISO timestamp when the payload was last written
+- `skills`: installed skills with source repo (`owner/repo`)
+- `updatedAt`: ISO timestamp of the last payload write
 
-This keeps the format easy to inspect and edit directly in GitHub if needed.
+## Security Response for Exposed Token
 
-## Typical Workflows
+If a token was committed previously, complete these manual steps:
 
-### First machine (create backup)
+1. Revoke the exposed token in GitHub immediately.
+2. Generate a new token with minimum required scope (`gist`).
+3. Update local auth (`skillhub login` and local `.npmrc` if used).
+4. Review package publish access/audit logs for suspicious activity.
 
-```bash
-# 1) Install skills using the official CLI
-npx skills add vercel-labs/agent-skills --all -g -y
+This repository only includes `.npmrc.example`; never commit real credentials.
 
-# 2) Login once
-skillhub login
+## Notes
 
-# 3) Push your current skills to Gist
-skillhub sync
-```
-
-### New machine (restore from backup)
+- Local discovery prioritizes `npx skills list -g`.
+- Fallback path uses `npx skills generate-lock` + `skills-lock.json` search.
+- Skill install command uses:
 
 ```bash
-# 1) Install and build SkillHub CLI
-npm install
-npm run build
-npm link
-
-# 2) Login with the same GitHub account/token
-skillhub login
-
-# 3) Pull skills from Gist and install missing ones
-skillhub sync
+npx skills add "<owner>/<repo>" --skill "<skill-name>" --global --yes
 ```
-
-## Notes and Limitations
-
-- Local discovery uses `npx skills list -g` as the primary source. That output
-  usually does **not** include `owner/repo`, so SkillHub may fall back to a
-  default source (`vercel-labs/agent-skills`) unless it can infer a source from
-  `skills-lock.json`.
-- For installs, SkillHub uses the stored `source` per skill:
-
-  ```bash
-  npx skills add "<owner>/<repo>" --skill "<skill-name>" -g -y
-  ```
-
-  If a skill name doesn’t exist in that repo, the install will fail but the
-  overall sync will continue.
-- The CLI currently focuses on **global** skills (`skills list -g`),
-  not project-scoped skills.
-- Error messages try to surface both:
-  - Which step failed (local list / lock file / install / Gist)
-  - The underlying CLI output for easier debugging

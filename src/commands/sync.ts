@@ -1,8 +1,8 @@
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
+import { exec, execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { configStore, MergeStrategy } from "@/service/config";
 import {
   createOctokit,
@@ -10,15 +10,29 @@ import {
   findSkillhubGist,
   getSkillhubPayload,
   updateSkillhubGist,
-  SkillhubPayload,
   SkillInfo,
+  SkillhubPayload,
 } from "@/service/gistService";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const SKILLS_LOCK_FILENAME = "skills-lock.json";
 const DEFAULT_STRATEGY: MergeStrategy = "union";
 const DEFAULT_SKILL_SOURCE_REPO = "vercel-labs/agent-skills";
+const NPX_COMMAND = process.platform === "win32" ? "npx.cmd" : "npx";
+const SOURCE_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+type InstallFailure = {
+  skill: SkillInfo;
+  reason: string;
+};
+
+type StrategyResult = {
+  uploaded: number;
+  installed: number;
+  failed: InstallFailure[];
+};
 
 export async function runSync(strategyInput?: string) {
   const strategy = parseStrategy(strategyInput);
@@ -48,10 +62,9 @@ export async function runSync(strategyInput?: string) {
   if (!gistId) {
     const found = await findSkillhubGist(octokit);
     if (found?.id) {
-      const foundId = found.id;
-      gistId = foundId;
-      await configStore.setGistId(foundId);
-      remotePayload = await safeGetPayload(octokit, foundId);
+      gistId = found.id;
+      await configStore.setGistId(found.id);
+      remotePayload = await safeGetPayload(octokit, found.id);
     }
   }
 
@@ -61,59 +74,75 @@ export async function runSync(strategyInput?: string) {
       throw new Error("Gist was created, but the ID could not be determined.");
     }
     await configStore.setGistId(created.id);
+    await configStore.setLastSyncAt(new Date().toISOString());
     console.log("No existing SkillHub Gist found. A new one has been created.");
-    console.log(`Uploaded 1 change, installed 0 skills`);
+    console.log(formatSummary({ uploaded: 1, installed: 0, failed: [] }));
     return;
   }
 
-  const resolvedRemote = remotePayload
+  const resolvedRemote: SkillhubPayload = remotePayload
     ? {
         ...remotePayload,
         skills: normalizeSkills(remotePayload.skills ?? []),
       }
     : { skills: [], updatedAt: "" };
 
-  if (strategy === "latest") {
-    await applyLatestStrategy({
-      octokit,
-      gistId,
-      local: localPayload,
-      remote: resolvedRemote,
-    });
-    return;
+  const lastSyncAt = await configStore.getLastSyncAt();
+
+  const result =
+    strategy === "latest"
+      ? await applyLatestStrategy({
+          octokit,
+          gistId,
+          local: localPayload,
+          remote: resolvedRemote,
+          lastSyncAt,
+        })
+      : await applyUnionStrategy({
+          octokit,
+          gistId,
+          local: localPayload,
+          remote: resolvedRemote,
+        });
+
+  console.log(formatSummary(result));
+
+  if (result.failed.length > 0) {
+    throw new Error(
+      `Sync completed with ${result.failed.length} failed install(s). Check logs above.`
+    );
   }
 
-  await applyUnionStrategy({
-    octokit,
-    gistId,
-    local: localPayload,
-    remote: resolvedRemote,
-  });
+  await configStore.setLastSyncAt(new Date().toISOString());
 }
 
 function parseStrategy(input?: string): MergeStrategy {
+  if (!input) {
+    return DEFAULT_STRATEGY;
+  }
+
   if (input === "latest" || input === "union") {
     return input;
   }
-  return DEFAULT_STRATEGY;
+
+  throw new Error(
+    `Invalid strategy "${input}". Use one of: union, latest.`
+  );
 }
 
 async function getLocalSkills(): Promise<SkillInfo[]> {
   // 1) Primary source: `skills list -g` output
-  // - generate-lock can be flaky (e.g. "already in lock file" without writing),
-  //   so we prefer parsing the list output when possible.
+  // generate-lock can be flaky, so list parsing is preferred.
   const listResult = await execAsync("npx skills list -g");
   const listOutput = `${listResult.stdout ?? ""}\n${listResult.stderr ?? ""}`.trim();
 
-  // When there are no global skills, skills CLI prints:
-  // "No global skills found.\nTry listing project skills without -g"
-  // In that case we treat it as an empty list and avoid polluting Gist.
   if (
     listOutput.includes("No global skills found") ||
     listOutput.includes("Try listing project skills without -g")
   ) {
     return [];
   }
+
   const fromList = parseSkillsListOutput(listOutput);
   if (fromList.length > 0) {
     return fromList;
@@ -131,20 +160,23 @@ async function getLocalSkills(): Promise<SkillInfo[]> {
     }
   }
 
-  if (output.includes("No installed skills found") || listOutput.includes("No project skills found")) {
+  if (
+    output.includes("No installed skills found") ||
+    listOutput.includes("No project skills found")
+  ) {
     return [];
   }
 
   throw new Error(
     [
-      `Unable to construct local skills list.`,
-      `- skills list -g output:`,
+      "Unable to construct local skills list.",
+      "- skills list -g output:",
       listOutput,
-      ``,
+      "",
       `- Searched ${SKILLS_LOCK_FILENAME} paths:`,
       ...candidatePaths.map((p) => `  - ${p}`),
-      ``,
-      `- npx skills generate-lock output:`,
+      "",
+      "- npx skills generate-lock output:",
       output,
     ].join("\n")
   );
@@ -154,14 +186,12 @@ function getCandidateSkillsLockPaths() {
   const cwdPath = path.resolve(process.cwd(), SKILLS_LOCK_FILENAME);
   const homePath = path.resolve(os.homedir(), SKILLS_LOCK_FILENAME);
 
-  // Cross-platform candidates when we don't know exactly where the tool writes
   const homeConfigPaths = [
     path.resolve(os.homedir(), ".config", "skills", SKILLS_LOCK_FILENAME),
     path.resolve(os.homedir(), ".config", "skillhub", SKILLS_LOCK_FILENAME),
     path.resolve(os.homedir(), ".skills", SKILLS_LOCK_FILENAME),
   ];
 
-  // Windows-specific candidates
   const winAppData = process.env.APPDATA;
   const winLocalAppData = process.env.LOCALAPPDATA;
   const windowsConfigPaths = [
@@ -188,33 +218,44 @@ async function tryReadSkillsLock(lockPath: string) {
 function parseSkillsLock(raw: string): SkillInfo[] {
   const parsed = JSON.parse(raw);
 
-  // skills-lock.json에서 source 정보 추출 시도
-  const extractSkills = (items: any[]): SkillInfo[] => {
+  const extractSkills = (items: unknown[]): SkillInfo[] => {
     return items.map((item) => {
       if (typeof item === "string") {
         return { name: item, source: DEFAULT_SKILL_SOURCE_REPO };
       }
+
       if (typeof item === "object" && item !== null) {
-        const name = item.name || item.skill || String(item);
-        const source = item.source || item.repo || DEFAULT_SKILL_SOURCE_REPO;
-        return { name: String(name), source: String(source) };
+        const objectItem = item as Record<string, unknown>;
+        const name =
+          typeof objectItem.name === "string"
+            ? objectItem.name
+            : typeof objectItem.skill === "string"
+              ? objectItem.skill
+              : String(item);
+        const source =
+          typeof objectItem.source === "string"
+            ? objectItem.source
+            : typeof objectItem.repo === "string"
+              ? objectItem.repo
+              : DEFAULT_SKILL_SOURCE_REPO;
+
+        return { name, source };
       }
+
       return { name: String(item), source: DEFAULT_SKILL_SOURCE_REPO };
     });
   };
 
-  const fromSkills = parsed?.skills;
-  if (Array.isArray(fromSkills)) {
-    return extractSkills(fromSkills);
+  if (Array.isArray(parsed?.skills)) {
+    return extractSkills(parsed.skills);
   }
 
   if (Array.isArray(parsed)) {
     return extractSkills(parsed);
   }
 
-  const fromInstalled = parsed?.installedSkills;
-  if (Array.isArray(fromInstalled)) {
-    return extractSkills(fromInstalled);
+  if (Array.isArray(parsed?.installedSkills)) {
+    return extractSkills(parsed.installedSkills);
   }
 
   return [];
@@ -234,15 +275,11 @@ function parseSkillsListOutput(output: string): SkillInfo[] {
     if (line.startsWith("No global skills found")) continue;
     if (line.startsWith("Try listing project skills without -g")) continue;
 
-    // Example: "find-skills ~\\.agents\\skills\\find-skills"
-    // We only take the first token as the skill name
     const [name] = line.split(/\s+/);
     if (!name) continue;
 
-    // Skip obvious path-like tokens as a safety net
     if (name.includes("\\") || name.includes("/") || name.includes("~")) continue;
-    
-    // skills list 출력에는 source 정보가 없으므로 기본값 사용
+
     skills.push({ name, source: DEFAULT_SKILL_SOURCE_REPO });
   }
 
@@ -262,18 +299,25 @@ function normalizeSkills(skills: SkillInfo[] | string[]): SkillInfo[] {
       if (typeof skill === "string") {
         return { name: skill, source: DEFAULT_SKILL_SOURCE_REPO };
       }
-      return skill;
+
+      return {
+        name: String(skill?.name ?? ""),
+        source: String(skill?.source ?? DEFAULT_SKILL_SOURCE_REPO),
+      };
     })
     .filter(
       (skill) =>
-        !!skill.name &&
+        skill.name.length > 0 &&
         !bannedSubstrings.some((bad) => skill.name.includes(bad))
     );
 
   return uniqueSortedSkills(normalized);
 }
 
-async function safeGetPayload(octokit: ReturnType<typeof createOctokit>, gistId: string) {
+async function safeGetPayload(
+  octokit: ReturnType<typeof createOctokit>,
+  gistId: string
+) {
   try {
     return await getSkillhubPayload(octokit, gistId);
   } catch {
@@ -284,7 +328,7 @@ async function safeGetPayload(octokit: ReturnType<typeof createOctokit>, gistId:
 function uniqueSortedSkills(skills: SkillInfo[]): SkillInfo[] {
   const seen = new Set<string>();
   const result: SkillInfo[] = [];
-  
+
   for (const skill of skills) {
     const key = `${skill.source}:${skill.name}`;
     if (!seen.has(key)) {
@@ -292,46 +336,60 @@ function uniqueSortedSkills(skills: SkillInfo[]): SkillInfo[] {
       result.push(skill);
     }
   }
-  
+
   return result.sort((a, b) => {
     if (a.source !== b.source) {
       return a.source.localeCompare(b.source);
     }
+
     return a.name.localeCompare(b.name);
   });
 }
 
 async function installSkills(skills: SkillInfo[]) {
   const succeeded: SkillInfo[] = [];
-  const failed: { skill: SkillInfo; reason: string }[] = [];
+  const failed: InstallFailure[] = [];
 
   for (const skill of skills) {
+    if (!isValidSource(skill.source)) {
+      const reason = `Invalid source "${skill.source}". Expected owner/repo format.`;
+      failed.push({ skill, reason });
+      console.warn(`Skill install failed: ${skill.name} (from ${skill.source})`);
+      console.warn(`  - ${reason}`);
+      continue;
+    }
+
     try {
-      const { stdout, stderr } = await execAsync(
-        `npx skills add ${skill.source} --skill "${skill.name}" --global --yes`
-      );
+      const { stdout, stderr } = await execFileAsync(NPX_COMMAND, [
+        "skills",
+        "add",
+        skill.source,
+        "--skill",
+        skill.name,
+        "--global",
+        "--yes",
+      ]);
       const output = `${stdout ?? ""}\n${stderr ?? ""}`.trim();
       if (output) {
         console.log(output);
       }
       succeeded.push(skill);
-    } catch (error: any) {
-      const stdout = error?.stdout ?? "";
-      const stderr = error?.stderr ?? "";
-      const reason = `${stdout}\n${stderr}`.trim() || String(error);
+    } catch (error: unknown) {
+      const detail = error as { stdout?: string; stderr?: string; message?: string };
+      const stdout = detail.stdout ?? "";
+      const stderr = detail.stderr ?? "";
+      const reason = `${stdout}\n${stderr}`.trim() || detail.message || String(error);
       failed.push({ skill, reason });
-      console.warn(
-        [
-          `스킬 설치 실패: ${skill.name} (from ${skill.source})`,
-          reason && `  └─ ${reason}`,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      );
+      console.warn(`Skill install failed: ${skill.name} (from ${skill.source})`);
+      console.warn(`  - ${reason}`);
     }
   }
 
   return { succeeded, failed };
+}
+
+function isValidSource(source: string) {
+  return SOURCE_PATTERN.test(source);
 }
 
 async function applyUnionStrategy(params: {
@@ -339,12 +397,11 @@ async function applyUnionStrategy(params: {
   gistId: string;
   local: SkillhubPayload;
   remote: SkillhubPayload;
-}) {
+}): Promise<StrategyResult> {
   const localSkills = normalizeSkills(params.local.skills);
   const remoteSkills = normalizeSkills(params.remote.skills);
 
   const unionSkills = uniqueSortedSkills([...localSkills, ...remoteSkills]);
-
   const missingLocally = unionSkills.filter(
     (skill) =>
       !localSkills.some(
@@ -352,23 +409,20 @@ async function applyUnionStrategy(params: {
       )
   );
 
-  const payload: SkillhubPayload = {
-    skills: unionSkills,
-    updatedAt: new Date().toISOString(),
-  };
-
   const { succeeded, failed } = await installSkills(missingLocally);
-  await updateSkillhubGist(params.octokit, params.gistId, payload);
+  const shouldUpload = !areSameSkills(remoteSkills, unionSkills);
+  if (shouldUpload) {
+    await updateSkillhubGist(params.octokit, params.gistId, {
+      skills: unionSkills,
+      updatedAt: new Date().toISOString(),
+    });
+  }
 
-  const uploadCount = areSameSkills(remoteSkills, unionSkills) ? 0 : 1;
-  const installCount = succeeded.length;
-  const failedCount = failed.length;
-
-  console.log(
-    `업로드 ${uploadCount}건, 설치 ${installCount}건${
-      failedCount ? ` (실패 ${failedCount}건은 로그 참고)` : ""
-    }`
-  );
+  return {
+    uploaded: shouldUpload ? 1 : 0,
+    installed: succeeded.length,
+    failed,
+  };
 }
 
 async function applyLatestStrategy(params: {
@@ -376,15 +430,16 @@ async function applyLatestStrategy(params: {
   gistId: string;
   local: SkillhubPayload;
   remote: SkillhubPayload;
-}) {
-  const localTime = Date.parse(params.local.updatedAt);
-  const remoteTime = Date.parse(params.remote.updatedAt);
+  lastSyncAt?: string;
+}): Promise<StrategyResult> {
+  const lastSyncTime = parseTimestamp(params.lastSyncAt) ?? 0;
+  const remoteTime = parseTimestamp(params.remote.updatedAt);
+  const isRemoteNewer = remoteTime !== null && remoteTime > lastSyncTime;
 
-  const isRemoteNewer = Number.isFinite(remoteTime) && remoteTime > localTime;
+  const localSkills = normalizeSkills(params.local.skills);
+  const remoteSkills = normalizeSkills(params.remote.skills);
 
   if (isRemoteNewer) {
-    const localSkills = normalizeSkills(params.local.skills);
-    const remoteSkills = normalizeSkills(params.remote.skills);
     const missingLocally = remoteSkills.filter(
       (skill) =>
         !localSkills.some(
@@ -392,17 +447,42 @@ async function applyLatestStrategy(params: {
         )
     );
     const { succeeded, failed } = await installSkills(missingLocally);
-    const failedCount = failed.length;
-    console.log(
-      `업로드 0건, 설치 ${succeeded.length}건${
-        failedCount ? ` (실패 ${failedCount}건은 로그 참고)` : ""
-      }`
-    );
-    return;
+    return {
+      uploaded: 0,
+      installed: succeeded.length,
+      failed,
+    };
   }
 
-  await updateSkillhubGist(params.octokit, params.gistId, params.local);
-  console.log("업로드 1건, 설치 0건");
+  const shouldUpload = !areSameSkills(localSkills, remoteSkills);
+  if (shouldUpload) {
+    await updateSkillhubGist(params.octokit, params.gistId, params.local);
+  }
+
+  return {
+    uploaded: shouldUpload ? 1 : 0,
+    installed: 0,
+    failed: [],
+  };
+}
+
+function parseTimestamp(value?: string) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatSummary(result: StrategyResult) {
+  const failPart =
+    result.failed.length > 0
+      ? ` (${result.failed.length} install failed - check logs)`
+      : "";
+  const uploadLabel = result.uploaded === 1 ? "change" : "changes";
+  const installLabel = result.installed === 1 ? "skill" : "skills";
+  return `Uploaded ${result.uploaded} ${uploadLabel}, installed ${result.installed} ${installLabel}${failPart}`;
 }
 
 function areSameSkills(left: SkillInfo[], right: SkillInfo[]) {
@@ -411,6 +491,7 @@ function areSameSkills(left: SkillInfo[], right: SkillInfo[]) {
   if (leftSorted.length !== rightSorted.length) {
     return false;
   }
+
   return leftSorted.every(
     (skill, index) =>
       skill.name === rightSorted[index].name &&

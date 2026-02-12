@@ -3,6 +3,7 @@ export type MergeStrategy = "union" | "latest";
 type ConfigShape = {
   githubToken?: string;
   gistId?: string;
+  lastSyncAt?: string;
 };
 
 type ConfigApi<T> = {
@@ -40,5 +41,13 @@ export const configStore = {
   async setGistId(gistId: string) {
     const config = await getConfig();
     config.set("gistId", gistId);
+  },
+  async getLastSyncAt() {
+    const config = await getConfig();
+    return config.get("lastSyncAt");
+  },
+  async setLastSyncAt(lastSyncAt: string) {
+    const config = await getConfig();
+    config.set("lastSyncAt", lastSyncAt);
   },
 };

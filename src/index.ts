@@ -2,9 +2,18 @@ import { Command } from "commander";
 import { runLogin } from "@/commands/login";
 import { runSync } from "@/commands/sync";
 
+function getPackageVersion() {
+  try {
+    const pkg = require("../package.json") as { version?: string };
+    return pkg.version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 const program = new Command();
 
-program.name("skillhub").description("SkillHub CLI").version("0.1.0");
+program.name("skillhub").description("SkillHub CLI").version(getPackageVersion());
 
 program
   .command("login")
@@ -25,4 +34,8 @@ program
     await runSync(options.strategy);
   });
 
-program.parseAsync(process.argv);
+program.parseAsync(process.argv).catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Error: ${message}`);
+  process.exitCode = 1;
+});

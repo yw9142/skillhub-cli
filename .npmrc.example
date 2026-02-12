@@ -1,0 +1,5 @@
+# Copy this file to .npmrc for local use only.
+# Do not commit your real .npmrc with credentials.
+
+# @your-scope:registry=https://npm.pkg.github.com
+# //npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
