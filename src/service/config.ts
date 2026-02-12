@@ -1,5 +1,3 @@
-export type MergeStrategy = "union" | "latest";
-
 type ConfigShape = {
   githubToken?: string;
   gistId?: string;

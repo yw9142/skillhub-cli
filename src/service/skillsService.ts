@@ -21,6 +21,11 @@ export type InstallFailure = {
   reason: string;
 };
 
+export type RemoveFailure = {
+  skill: SkillInfo;
+  reason: string;
+};
+
 function stringifyCommandResult(result: { stdout?: string; stderr?: string }) {
   return `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
 }
@@ -229,6 +234,44 @@ export async function installSkills(
       failed.push({ skill, reason });
       if (options.verbose) {
         console.warn(`Skill install failed: ${skill.name} (from ${skill.source})`);
+        console.warn(`  - ${reason}`);
+      }
+    }
+  }
+
+  return { succeeded, failed };
+}
+
+export async function removeSkills(
+  skills: SkillInfo[],
+  options: { verbose?: boolean } = {}
+) {
+  const succeeded: SkillInfo[] = [];
+  const failed: RemoveFailure[] = [];
+  const seen = new Set<string>();
+
+  for (const skill of skills) {
+    const key = `${skill.source}:${skill.name}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+
+    try {
+      const result = await runSkillsCommand(
+        ["remove", "--skill", skill.name, "--global", "--yes"],
+        `skills remove --skill ${skill.name}`
+      );
+      const output = stringifyCommandResult(result);
+      if (options.verbose && output) {
+        console.log(output);
+      }
+      succeeded.push(skill);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      failed.push({ skill, reason });
+      if (options.verbose) {
+        console.warn(`Skill remove failed: ${skill.name} (from ${skill.source})`);
         console.warn(`  - ${reason}`);
       }
     }

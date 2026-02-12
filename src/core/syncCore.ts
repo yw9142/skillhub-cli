@@ -1,4 +1,3 @@
-import { MergeStrategy } from "@/service/config";
 import { SkillInfo, SkillhubPayload } from "@/service/gistService";
 
 const DEFAULT_SKILL_SOURCE_REPO = "vercel-labs/agent-skills";
@@ -9,8 +8,16 @@ const BANNED_SKILL_NAME_SUBSTRINGS = [
   "Try listing global skills",
 ];
 
-export type SyncPlan = {
-  strategy: MergeStrategy;
+export type MergeSyncPlan = {
+  mode: "merge";
+  localSkills: SkillInfo[];
+  remoteSkills: SkillInfo[];
+  installCandidates: SkillInfo[];
+  uploadPayload: SkillhubPayload | null;
+};
+
+export type AutoSyncPlan = {
+  mode: "auto";
   localSkills: SkillInfo[];
   remoteSkills: SkillInfo[];
   installCandidates: SkillInfo[];
@@ -18,17 +25,20 @@ export type SyncPlan = {
   isRemoteNewer: boolean;
 };
 
-export function parseStrategy(input?: string): MergeStrategy {
-  if (!input) {
-    return "union";
-  }
+export type PullSyncPlan = {
+  mode: "pull";
+  localSkills: SkillInfo[];
+  remoteSkills: SkillInfo[];
+  installCandidates: SkillInfo[];
+  removeCandidates: SkillInfo[];
+};
 
-  if (input === "union" || input === "latest") {
-    return input;
-  }
-
-  throw new Error(`Invalid strategy "${input}". Use one of: union, latest.`);
-}
+export type PushSyncPlan = {
+  mode: "push";
+  localSkills: SkillInfo[];
+  remoteSkills: SkillInfo[];
+  uploadPayload: SkillhubPayload | null;
+};
 
 export function parseTimestamp(value?: string) {
   if (!value) {
@@ -94,41 +104,44 @@ export function areSameSkills(left: SkillInfo[], right: SkillInfo[]) {
   );
 }
 
-export function buildSyncPlan(params: {
-  strategy: MergeStrategy;
+export function buildMergePlan(params: {
+  localPayload: SkillhubPayload;
+  remotePayload: SkillhubPayload;
+  nowIso: string;
+}): MergeSyncPlan {
+  const localSkills = normalizeSkills(params.localPayload.skills);
+  const remoteSkills = normalizeSkills(params.remotePayload.skills);
+  const unionSkills = uniqueSortedSkills([...localSkills, ...remoteSkills]);
+  const installCandidates = unionSkills.filter(
+    (skill) =>
+      !localSkills.some(
+        (local) => local.name === skill.name && local.source === skill.source
+      )
+  );
+  const uploadPayload = areSameSkills(remoteSkills, unionSkills)
+    ? null
+    : {
+        skills: unionSkills,
+        updatedAt: params.nowIso,
+      };
+
+  return {
+    mode: "merge",
+    localSkills,
+    remoteSkills,
+    installCandidates,
+    uploadPayload,
+  };
+}
+
+export function buildAutoPlan(params: {
   localPayload: SkillhubPayload;
   remotePayload: SkillhubPayload;
   lastSyncAt?: string;
   nowIso: string;
-}): SyncPlan {
+}): AutoSyncPlan {
   const localSkills = normalizeSkills(params.localPayload.skills);
   const remoteSkills = normalizeSkills(params.remotePayload.skills);
-
-  if (params.strategy === "union") {
-    const unionSkills = uniqueSortedSkills([...localSkills, ...remoteSkills]);
-    const installCandidates = unionSkills.filter(
-      (skill) =>
-        !localSkills.some(
-          (local) => local.name === skill.name && local.source === skill.source
-        )
-    );
-    const uploadPayload = areSameSkills(remoteSkills, unionSkills)
-      ? null
-      : {
-          skills: unionSkills,
-          updatedAt: params.nowIso,
-        };
-
-    return {
-      strategy: "union",
-      localSkills,
-      remoteSkills,
-      installCandidates,
-      uploadPayload,
-      isRemoteNewer: false,
-    };
-  }
-
   const lastSyncTime = parseTimestamp(params.lastSyncAt) ?? 0;
   const remoteTime = parseTimestamp(params.remotePayload.updatedAt);
   const isRemoteNewer = remoteTime !== null && remoteTime > lastSyncTime;
@@ -142,7 +155,7 @@ export function buildSyncPlan(params: {
     );
 
     return {
-      strategy: "latest",
+      mode: "auto",
       localSkills,
       remoteSkills,
       installCandidates,
@@ -155,15 +168,69 @@ export function buildSyncPlan(params: {
     ? null
     : {
         skills: localSkills,
-        updatedAt: params.nowIso,
-      };
+      updatedAt: params.nowIso,
+    };
 
   return {
-    strategy: "latest",
+    mode: "auto",
     localSkills,
     remoteSkills,
     installCandidates: [],
     uploadPayload,
     isRemoteNewer,
+  };
+}
+
+export function buildPullPlan(params: {
+  localPayload: SkillhubPayload;
+  remotePayload: SkillhubPayload;
+}): PullSyncPlan {
+  const localSkills = normalizeSkills(params.localPayload.skills);
+  const remoteSkills = normalizeSkills(params.remotePayload.skills);
+
+  const installCandidates = remoteSkills.filter(
+    (remote) =>
+      !localSkills.some(
+        (local) =>
+          local.name === remote.name && local.source === remote.source
+      )
+  );
+  const removeCandidates = localSkills.filter(
+    (local) =>
+      !remoteSkills.some(
+        (remote) =>
+          remote.name === local.name && remote.source === local.source
+      )
+  );
+
+  return {
+    mode: "pull",
+    localSkills,
+    remoteSkills,
+    installCandidates,
+    removeCandidates,
+  };
+}
+
+export function buildPushPlan(params: {
+  localPayload: SkillhubPayload;
+  remotePayload: SkillhubPayload;
+  nowIso: string;
+}): PushSyncPlan {
+  const localSkills = normalizeSkills(params.localPayload.skills);
+  const remoteSkills = normalizeSkills(params.remotePayload.skills);
+
+  const uploadPayload = areSameSkills(localSkills, remoteSkills)
+    ? null
+    : {
+        skills: localSkills,
+        updatedAt: params.nowIso,
+      };
+
+  return {
+    mode: "push",
+    localSkills,
+    remoteSkills,
+    uploadPayload,
   };
 }

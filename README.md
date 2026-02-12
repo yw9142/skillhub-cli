@@ -24,55 +24,69 @@ npx @yw9142/skillhub-cli <command>
 
 ## Commands
 
-### Login
+### Auth
 
 ```bash
-skillhub login
+skillhub auth login
+skillhub auth status
+skillhub auth status --json
+skillhub auth logout
+skillhub auth logout --yes
+skillhub auth logout --json
 ```
 
-- Prompts for a GitHub PAT (classic, `gist` scope)
-- Verifies token + Gist API access
-- Stores token locally via `conf`
+- `auth login`: prompts for a GitHub PAT (classic, `gist` scope), verifies access, and stores it via `conf`
+- `auth status`: shows login state, gist id, last successful sync timestamp, local skill count, and Gist API accessibility
+- `auth logout`: clears stored session keys (`githubToken`, `gistId`, `lastSyncAt`)
 
 ### Sync
 
-```bash
-skillhub sync
-skillhub sync --strategy union
-skillhub sync --strategy latest
-skillhub sync --dry-run
-skillhub sync --json
-```
-
-- `union`: merge local and remote skills, install missing local skills, upload only when changed
-- `latest`: compare `remote.updatedAt` and local `lastSyncAt`
-- `--dry-run`: compute plan only (no install, no Gist update, no config write)
-- `--json`: single JSON output object
-
-### Status
+`skillhub sync` requires a subcommand.
 
 ```bash
-skillhub status
-skillhub status --json
+skillhub sync pull
+skillhub sync push
+skillhub sync merge
+skillhub sync auto
 ```
 
-Shows:
-
-- login state
-- stored gist id
-- last successful sync timestamp
-- local skill count (if available)
-- remote Gist API accessibility
-
-### Logout
+Common options:
 
 ```bash
-skillhub logout
-skillhub logout --yes
-skillhub logout --json
+--dry-run   # compute plan only (no install/remove/upload/config write)
+--json      # single JSON output object
 ```
 
-Clears stored session keys: `githubToken`, `gistId`, `lastSyncAt`.
+`pull` only:
+
+```bash
+--yes       # skip deletion confirmation prompt
+```
+
+Mode behavior:
+
+- `pull`: mirror remote to local (remote -> local). Installs missing local skills and removes extra local skills.
+- `push`: mirror local to remote (local -> remote). Updates/creates remote Gist payload from local skills.
+- `merge`: union local + remote, installs missing local skills, uploads when remote differs.
+- `auto`: compare `remote.updatedAt` and local `lastSyncAt`; install from remote when remote is newer, otherwise upload local when needed.
+
+## Migration (Breaking Changes in 0.3.0)
+
+Removed commands:
+
+- `skillhub login`
+- `skillhub status`
+- `skillhub logout`
+- `skillhub sync --strategy ...`
+- `skillhub sync` (without a subcommand)
+
+New mapping:
+
+- `skillhub login` -> `skillhub auth login`
+- `skillhub status` -> `skillhub auth status`
+- `skillhub logout` -> `skillhub auth logout`
+- `skillhub sync --strategy union` -> `skillhub sync merge`
+- `skillhub sync --strategy latest` -> `skillhub sync auto`
 
 ## Payload Format
 
@@ -87,7 +101,7 @@ Clears stored session keys: `githubToken`, `gistId`, `lastSyncAt`.
 }
 ```
 
-Backward compatibility for legacy `skills: string[]` is preserved.
+Backward compatibility for legacy `skills: string[]` payloads is preserved.
 
 ## Local npm Credentials
 
@@ -113,9 +127,10 @@ Publish:
 npm run release
 ```
 
-CI release workflow requires:
+CI release workflow publishes to GitHub Packages only:
 
-- `NPM_TOKEN` repository secret for npmjs publish of `@yonpark/skillhub-cli`.
 - GitHub Packages publish uses `GITHUB_TOKEN` by default.
 - If needed, add `GH_PACKAGES_TOKEN` (PAT with `write:packages`) for GitHub Packages.
 - GitHub Packages target package is `@yw9142/skillhub-cli`.
+
+npmjs publish is manual.

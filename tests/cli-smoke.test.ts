@@ -40,6 +40,8 @@ describe.skipIf(!existsSync(CLI_ENTRY))("cli smoke", () => {
     const result = runCli(["--help"], sandboxEnv);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: skillhub");
+    expect(result.stdout).toContain("auth");
+    expect(result.stdout).toContain("sync");
   });
 
   it("prints version", () => {
@@ -48,14 +50,26 @@ describe.skipIf(!existsSync(CLI_ENTRY))("cli smoke", () => {
     expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it("fails invalid strategy", () => {
-    const result = runCli(["sync", "--strategy", "nope"], sandboxEnv);
+  it("fails when sync mode is missing", () => {
+    const result = runCli(["sync"], sandboxEnv);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Invalid strategy "nope"');
+    expect(result.stderr).toContain("Missing sync mode");
+  });
+
+  it("fails removed top-level login command", () => {
+    const result = runCli(["login"], sandboxEnv);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unknown command 'login'");
+  });
+
+  it("fails removed strategy option", () => {
+    const result = runCli(["sync", "merge", "--strategy", "union"], sandboxEnv);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unknown option '--strategy'");
   });
 
   it("returns status as json", () => {
-    const result = runCli(["status", "--json"], sandboxEnv);
+    const result = runCli(["auth", "status", "--json"], sandboxEnv);
     expect(result.status).toBe(0);
     const parsed = JSON.parse(result.stdout);
     expect(parsed).toHaveProperty("loggedIn");
@@ -63,8 +77,8 @@ describe.skipIf(!existsSync(CLI_ENTRY))("cli smoke", () => {
     expect(parsed).toHaveProperty("lastSyncAt");
   });
 
-  it("supports logout --yes", () => {
-    const result = runCli(["logout", "--yes"], sandboxEnv);
+  it("supports auth logout --yes", () => {
+    const result = runCli(["auth", "logout", "--yes"], sandboxEnv);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Logout completed");
   });
