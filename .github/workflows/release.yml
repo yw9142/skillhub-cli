@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 jobs:
-  publish-github-packages:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,11 +31,43 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Configure npm auth for GitHub Packages
+      - name: Publish to npmjs when version is new
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          target_name="@yonpark/skillhub-cli"
+          package_version="$(node -p "require('./package.json').version")"
+          original_name="$(node -p "require('./package.json').name")"
+          trap 'npm pkg set name="${original_name}" > /dev/null' EXIT
+
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN is empty. Add repository secret NPM_TOKEN."
+            exit 1
+          fi
+
+          if npm view "${target_name}@${package_version}" version --registry https://registry.npmjs.org > /dev/null 2>&1; then
+            echo "npmjs already has ${target_name}@${package_version}; skipping publish."
+            exit 0
+          fi
+
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          npm pkg set name="${target_name}"
+
+          if ! npm publish --registry https://registry.npmjs.org --access public; then
+            echo "::error::npmjs publish failed. Verify NPM_TOKEN has publish permission for ${target_name}."
+            exit 1
+          fi
+
+      - name: Configure auth for GitHub Packages
         env:
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          package_name="$(node -p "require('./package.json').name")"
+          if [ "${package_name}" != "@yw9142/skillhub-cli" ]; then
+            npm pkg set name="@yw9142/skillhub-cli"
+          fi
+
           if [ -n "${GH_PACKAGES_TOKEN}" ]; then
             token="${GH_PACKAGES_TOKEN}"
             echo "Using GH_PACKAGES_TOKEN for GitHub Packages publish."
@@ -44,13 +76,17 @@ jobs:
             echo "Using default GITHUB_TOKEN for GitHub Packages publish."
           fi
 
-          echo "NODE_AUTH_TOKEN=${token}" >> "$GITHUB_ENV"
+          if [ -z "${token}" ]; then
+            echo "::error::No token available for GitHub Packages publish."
+            exit 1
+          fi
+
           echo "@yw9142:registry=https://npm.pkg.github.com" > ~/.npmrc
           echo "//npm.pkg.github.com/:_authToken=${token}" >> ~/.npmrc
 
       - name: Publish to GitHub Packages when version is new
         run: |
-          package_name="$(node -p "require('./package.json').name")"
+          package_name="@yw9142/skillhub-cli"
           package_version="$(node -p "require('./package.json').version")"
 
           if npm view "${package_name}@${package_version}" version --registry https://npm.pkg.github.com > /dev/null 2>&1; then

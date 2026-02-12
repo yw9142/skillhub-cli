@@ -115,5 +115,7 @@ npm run release
 
 CI release workflow requires:
 
-- GitHub Packages publish uses `GITHUB_TOKEN` from Actions.
-- Package is published to GitHub Packages as `@yw9142/skillhub-cli`.
+- `NPM_TOKEN` repository secret for npmjs publish of `@yonpark/skillhub-cli`.
+- GitHub Packages publish uses `GITHUB_TOKEN` by default.
+- If needed, add `GH_PACKAGES_TOKEN` (PAT with `write:packages`) for GitHub Packages.
+- GitHub Packages target package is `@yw9142/skillhub-cli`.
