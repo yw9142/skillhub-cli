@@ -1,4 +1,4 @@
-# @yonpark/skillhub-cli
+# @yw9142/skillhub-cli
 
 ## 0.2.0
 

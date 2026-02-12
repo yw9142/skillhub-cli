@@ -19,7 +19,7 @@ node bin/skillhub.js <command>
 Published package:
 
 ```bash
-npx @yonpark/skillhub-cli <command>
+npx @yw9142/skillhub-cli <command>
 ```
 
 ## Commands
@@ -115,5 +115,5 @@ npm run release
 
 CI release workflow requires:
 
-- `NPM_TOKEN` secret with publish permission to `@yonpark` scope.
+- `NPM_TOKEN` secret with publish permission to `@yw9142` scope.
 - GitHub Packages mirror is published as `@yw9142/skillhub-cli` via `GITHUB_TOKEN`.
