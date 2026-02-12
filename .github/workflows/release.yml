@@ -35,8 +35,21 @@ jobs:
 
       - name: Verify npm authentication
         run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN is empty. Set it in the 'NPM_TOKEN' environment secrets."
+            exit 1
+          fi
+
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          npm whoami
+          npm_user="$(npm whoami)"
+          package_scope="$(node -p "const n=require('./package.json').name; const m=n.match(/^@([^/]+)\\//); m ? m[1] : ''")"
+
+          if [ -n "${package_scope}" ] && [ "${npm_user}" != "${package_scope}" ]; then
+            echo "::error::NPM token owner '${npm_user}' does not match package scope '@${package_scope}'."
+            exit 1
+          fi
+
+          echo "npm auth verified for user: ${npm_user}"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
